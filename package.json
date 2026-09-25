@@ -1,0 +1,17 @@
+{
+  "name": "starwish-magical-team",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A cooperative magical-girl deckbuilding game for local and Hamachi play.",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @starwish/web --filter @starwish/server dev",
+    "build": "pnpm --filter @starwish/shared build && pnpm --filter @starwish/web build && pnpm --filter @starwish/server build",
+    "test": "pnpm --filter @starwish/shared test && pnpm --filter @starwish/server test",
+    "start": "pnpm --filter @starwish/server start"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
