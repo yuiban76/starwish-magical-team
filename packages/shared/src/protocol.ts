@@ -2,15 +2,35 @@ export type PoolKind = "character" | "card";
 export type GamePhase = "lobby" | "combat" | "reward" | "victory" | "defeat";
 
 export type GameCommand =
-  | { type: "join"; displayName: string; resumeToken?: string }
+  | { type: "join"; displayName: string; profile: PlayerProfile; resumeToken?: string }
   | { type: "select-character"; characterId: string }
   | { type: "set-deck"; cardIds: string[] }
   | { type: "start-run" }
   | { type: "submit-plan"; cardIds: string[]; targets: string[] }
   | { type: "ready" }
-  | { type: "choose-reward"; cardId: string }
-  | { type: "draw"; pool: PoolKind }
-  | { type: "leave" };
+  | { type: "choose-reward"; cardId: string };
+
+export type GameAction = Exclude<GameCommand, { type: "join" }>;
+
+export interface RoomCreationResponse {
+  roomCode: string;
+  addresses: Array<{ kind: "local" | "hamachi"; ip: string; url: string }>;
+}
+
+export interface EngineResult<State> {
+  state: State;
+  error?: { code: string; message: string };
+  notices?: string[];
+}
+
+/** Pure game rules adapter shared by the local host server and the solo UI. */
+export interface GameEngine<State> {
+  createRoom(roomCode: string): State;
+  join(state: State, playerId: string, displayName: string, profile: PlayerProfile): EngineResult<State>;
+  disconnect(state: State, playerId: string): EngineResult<State>;
+  dispatch(state: State, playerId: string, action: GameAction): EngineResult<State>;
+  viewFor(state: State, playerId: string): GameView;
+}
 
 export type ServerMessage =
   | { type: "connected"; playerId: string; resumeToken: string; roomCode: string; protocolVersion: 1 }
