@@ -5,7 +5,7 @@ import {
   createPlayerProfile,
   migratePlayerProfile,
 } from "@starwish/shared";
-import type { CardView, PlayerProfile } from "../../../packages/shared/src/protocol.js";
+import type { CardView, PlayerProfile } from "@starwish/shared";
 
 const portraitFocus: Record<string, string> = { luna: "62%", sol: "42%", nova: "78%", aria: "100%", yume: "44%", nene: "100%", akari: "100%", ruri: "78%" };
 
@@ -24,7 +24,7 @@ export const cards = gameCards.map((card) => ({
 
 export const characterPoolIds = characters.filter((character) => character.pullable).map((character) => character.id);
 export const cardPoolIds = cards.filter((card) => card.pullable).map((card) => card.id);
-export const initialDeckIds = [...CORE_DECK_CARD_IDS];
+export const initialDeckIds: string[] = [...CORE_DECK_CARD_IDS];
 
 const savedProfileKey = "starwish.profile.v1";
 

@@ -85,6 +85,8 @@ function testEngine(): GameEngine<TestState> {
 const servers: RunningGameServer[] = [];
 const sockets: WebSocket[] = [];
 const directories: string[] = [];
+const messageBuffers = new WeakMap<WebSocket, Record<string, unknown>[]>();
+const messageWaiters = new WeakMap<WebSocket, Array<(message: Record<string, unknown>) => void>>();
 
 afterEach(async () => {
   for (const socket of sockets.splice(0)) {
@@ -107,13 +109,29 @@ async function serverInDirectory(dataDirectory: string, engine = testEngine()) {
 }
 
 async function nextMessage(socket: WebSocket): Promise<Record<string, unknown>> {
-  const [data] = await once(socket, "message");
-  return JSON.parse(data.toString()) as Record<string, unknown>;
+  const buffer = messageBuffers.get(socket) ?? [];
+  messageBuffers.set(socket, buffer);
+  const queued = buffer.shift();
+  if (queued) return queued;
+  return new Promise((resolveMessage) => {
+    const waiters = messageWaiters.get(socket) ?? [];
+    waiters.push(resolveMessage);
+    messageWaiters.set(socket, waiters);
+  });
 }
 
 async function connect(url: string): Promise<WebSocket> {
   const socket = new WebSocket(url);
   sockets.push(socket);
+  messageBuffers.set(socket, []);
+  messageWaiters.set(socket, []);
+  socket.on("message", (data) => {
+    const message = JSON.parse(data.toString()) as Record<string, unknown>;
+    const waiters = messageWaiters.get(socket) ?? [];
+    const next = waiters.shift();
+    if (next) next(message);
+    else messageBuffers.get(socket)?.push(message);
+  });
   await once(socket, "open");
   return socket;
 }
@@ -150,9 +168,8 @@ describe("local host server", () => {
     expect(secondHand).not.toBe(`private-${firstId}`);
 
     const firstUpdate = await nextMessage(first);
-    const secondUpdate = await nextMessage(second);
     expect(JSON.stringify(firstUpdate)).not.toContain(`private-${secondConnected.playerId}`);
-    expect(JSON.stringify(secondUpdate)).not.toContain(`private-${firstId}`);
+    expect(JSON.stringify(secondState)).not.toContain(`private-${firstId}`);
 
     first.send(JSON.stringify({ type: "ready" }));
     const firstReadyUpdate = await nextMessage(first);
@@ -164,9 +181,7 @@ describe("local host server", () => {
   it("rejects invalid room codes and persists versioned host saves", async () => {
     const running = await serverWithTemporaryData();
     const base = `http://127.0.0.1:${running.address.port}`;
-    const invalid = new WebSocket(`ws://127.0.0.1:${running.address.port}/ws?room=ABCDEF`);
-    sockets.push(invalid);
-    await once(invalid, "open");
+    const invalid = await connect(`ws://127.0.0.1:${running.address.port}/ws?room=ABCDEF`);
     expect(await nextMessage(invalid)).toMatchObject({ type: "error", code: "ROOM_NOT_FOUND" });
 
     const response = await fetch(`${base}/api/rooms`, { method: "POST" });

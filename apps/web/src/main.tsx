@@ -143,6 +143,7 @@ function App() {
   const ownedCardIds = useMemo(() => Object.keys(profile.ownedCardLevels).filter((id) => profile.ownedCardLevels[id]! > 0), [profile]);
   const selectedCharacter = characters.find((item) => item.id === profile.selectedCharacterId) ?? characters[0]!;
   const displayCurrency = view && connection === "connected" ? view.self.currency : profile.currency;
+  const canSummonNow = connection === "offline" && view === null || connection === "demo" && view?.phase === "lobby";
 
   const pushToast = useCallback((message: string, kind: Toast["kind"] = "info") => setToast({ message, kind }), []);
 
@@ -286,6 +287,26 @@ function App() {
     pushToast("練習模式已開啟。戰鬥與星晶獎勵只保存在這台裝置。", "info");
   }, [navigate, pushToast]);
 
+  const leaveRoom = useCallback(() => {
+    if (retryTimerRef.current !== null) window.clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = null;
+    manualCloseRef.current = true;
+    const oldSocket = socketRef.current;
+    socketRef.current = null;
+    oldSocket?.close(1000, "Player left the room");
+    manualCloseRef.current = false;
+    demoRef.current = false;
+    localEngineStateRef.current = null;
+    setConnection("offline");
+    setView(null);
+    setPlayerId("");
+    setRoomCode("");
+    setAddresses([]);
+    setBattleSelection([]);
+    setTargetId("");
+    navigate("home");
+  }, [navigate]);
+
   const dispatchDemo = useCallback((action: GameAction) => {
     const currentState = localEngineStateRef.current;
     if (!currentState) return;
@@ -298,6 +319,8 @@ function App() {
     const nextView = engine.viewFor(result.state, "solo-player");
     setView(nextView);
     setProfile(nextView.self.collection);
+    setBattleSelection(nextView.self.selectedCardIds);
+    setTargetId(nextView.self.selectedTargets[0] ?? nextView.enemies[0]?.id ?? "");
   }, [pushToast]);
 
   const sendAction = useCallback((action: GameAction) => {
@@ -314,6 +337,10 @@ function App() {
 
   const performSummon = useCallback(() => {
     if (revealing) return;
+    if (!canSummonNow) {
+      pushToast("請先離開進行中的房間，再召喚角色或卡牌。", "info");
+      return;
+    }
     setRevealing(true);
     setLastDrop(null);
     window.setTimeout(() => {
@@ -330,7 +357,7 @@ function App() {
       }
       setRevealing(false);
     }, 520);
-  }, [pool, pushToast, revealing, setLocalProfile]);
+  }, [canSummonNow, pool, pushToast, revealing, setLocalProfile]);
 
   const exportProfile = useCallback(() => {
     const blob = new Blob([JSON.stringify(profile, null, 2)], { type: "application/json" });
@@ -345,6 +372,13 @@ function App() {
   const importProfile = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (connection !== "offline" || view !== null) {
+      const message = "請先離開房間，再匯入收藏檔以免進度不同步。";
+      setImportError(message);
+      pushToast(message, "error");
+      event.target.value = "";
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       try {
@@ -366,7 +400,7 @@ function App() {
       }
     };
     reader.readAsText(file);
-  }, [pushToast, setLocalProfile]);
+  }, [connection, pushToast, setLocalProfile, view]);
 
   const toggleDeckCard = useCallback((cardId: string) => {
     const currentDeck = profileRef.current.selectedDeckCardIds.length ? profileRef.current.selectedDeckCardIds : [...initialDeckIds];
@@ -422,11 +456,11 @@ function App() {
   return (
     <div className="app-shell">
       <aside className="side-rail" aria-label="主要導覽">
-        <button className="brand-mark" type="button" onClick={() => navigate("home")} aria-label="回到遠征大廳"><span>星</span><i>✦</i></button>
+        <button className="brand-mark" type="button" onClick={() => (view || connection === "demo" || connection === "connected") ? leaveRoom() : navigate("home")} aria-label="回到遠征大廳"><span>星</span><i>✦</i></button>
         <div className="side-rail__line" />
         <nav className="side-nav">
           {(["home", "summon", "collection"] as Route[]).map((item) => (
-            <button key={item} className={`side-nav__item ${route === item ? "is-active" : ""}`} onClick={() => navigate(item)} type="button" aria-current={route === item ? "page" : undefined}>
+            <button key={item} className={`side-nav__item ${route === item ? "is-active" : ""}`} onClick={() => item === "home" && (view || connection === "demo" || connection === "connected") ? leaveRoom() : navigate(item)} type="button" aria-current={route === item ? "page" : undefined}>
               <span className="side-nav__icon" aria-hidden="true">{item === "home" ? "⌂" : item === "summon" ? "✧" : "▤"}</span>
               <span>{routeNames[item]}</span>
             </button>
@@ -498,7 +532,7 @@ function App() {
 
         {route === "room" && (
           <section className="room-page page-enter" aria-labelledby="room-title">
-            <div className="page-title-row"><div><p className="eyebrow">隊伍月台</p><h1 id="room-title">整裝待發</h1><p>確認夥伴與牌組，再由房主開啟遠征。</p></div><button type="button" className="button button--subtle" onClick={() => navigate("home")}>回到大廳</button></div>
+            <div className="page-title-row"><div><p className="eyebrow">隊伍月台</p><h1 id="room-title">整裝待發</h1><p>確認夥伴與牌組，再由房主開啟遠征。</p></div><button type="button" className="button button--subtle" onClick={leaveRoom}>離開房間</button></div>
             <div className="room-grid">
               <section className="panel room-panel room-panel--team">
                 <div className="section-heading"><div><span className="section-heading__mark">✦</span><h2>遠征隊伍</h2></div><span className="pill">{activeView?.players.length ?? 0} / 4</span></div>
@@ -536,7 +570,7 @@ function App() {
             {!activeView ? <div className="empty-state panel"><span>✧</span><h1>尚未開始遠征</h1><p>先建立或加入一個房間。</p><button className="button button--gold" onClick={() => navigate("home")} type="button">前往遠征大廳</button></div> : activeView.phase === "reward" ? (
               <div className="reward-screen"><div className="reward-copy"><p className="eyebrow">沿途發現</p><h1 id="battle-title">挑一張卡，<br />把星光帶上路。</h1><p>這張卡只加入本次遠征牌組。每位隊員都能各自選擇。</p><span className="reward-coin">✦ 通過戰鬥獲得 30 星晶</span></div><div className="reward-cards">{activeView.rewardOptions.map((card) => <GameCard key={card.id} card={card} label="加入本次遠征" onClick={() => sendAction({ type: "choose-reward", cardId: card.id })} />)}</div></div>
             ) : activeView.phase === "victory" || activeView.phase === "defeat" ? (
-              <div className={`result-screen result-screen--${activeView.phase}`}><div className="result-screen__art"><CharacterPortrait characterId={profile.selectedCharacterId} size="large" /></div><div className="result-screen__copy"><p className="eyebrow">{activeView.phase === "victory" ? "星路已照亮" : "暫時撤退"}</p><h1 id="battle-title">{activeView.phase === "victory" ? "願望抵達了。" : "下一次，我們會更靠近。"}</h1><p>{activeView.phase === "victory" ? "蝕月退去，新的星光正等著你。" : "星晶和收藏仍留在你的檔案裡，再整裝一次吧。"}</p><button type="button" className="button button--gold" onClick={() => { navigate("home"); setView(null); setConnection("offline"); demoRef.current = false; }}>回到遠征大廳</button></div></div>
+              <div className={`result-screen result-screen--${activeView.phase}`}><div className="result-screen__art"><CharacterPortrait characterId={profile.selectedCharacterId} size="large" /></div><div className="result-screen__copy"><p className="eyebrow">{activeView.phase === "victory" ? "星路已照亮" : "暫時撤退"}</p><h1 id="battle-title">{activeView.phase === "victory" ? "願望抵達了。" : "下一次，我們會更靠近。"}</h1><p>{activeView.phase === "victory" ? "蝕月退去，新的星光正等著你。" : "星晶和收藏仍留在你的檔案裡，再整裝一次吧。"}</p><button type="button" className="button button--gold" onClick={leaveRoom}>回到遠征大廳</button></div></div>
             ) : (
               <>
                 <div className="battle-arena">
@@ -564,8 +598,8 @@ function App() {
                 <div className="pool-summary"><span className="pool-summary__ornament">{pool === "character" ? "✧" : "◈"}</span><div><h2>{pool === "character" ? "星之同伴" : "旅途秘術"}</h2><p>{pool === "character" ? "讓新夥伴加入你的收藏與下一趟遠征。" : "把新的魔法帶進你編排的牌組。"}</p></div></div>
                 <div className="rates-box"><div><strong>召喚機率</strong><small>每次抽取獨立計算 · 沒有保底</small></div><div className="rate-list"><span><i className="rarity-dot rarity-dot--common" />普通 <b>{Math.round(RARITY_ODDS.common * 100)}%</b></span><span><i className="rarity-dot rarity-dot--rare" />稀有 <b>{Math.round(RARITY_ODDS.rare * 100)}%</b></span><span><i className="rarity-dot rarity-dot--epic" />史詩 <b>{Math.round(RARITY_ODDS.epic * 100)}%</b></span></div></div>
                 {lastDrop && <div className={`summon-result summon-result--${lastDrop.rarity}`} role="status"><span className="summon-result__star">✦</span><div><small>{lastDrop.refunded ? "滿級重複收藏" : lastDrop.upgraded ? "收藏升級" : "新收藏"} · {rarityName(lastDrop.rarity)}</small><strong>{lastDrop.name}</strong><span>{lastDrop.refunded ? `退還 ${lastDrop.refunded} 星晶` : `${levelText(lastDrop.level)}${lastDrop.upgraded ? " · 能力提升" : " · 已加入收藏"}`}</span></div><span className="summon-result__sparkle" aria-hidden="true">✧</span></div>}
-                <button type="button" className={`button button--gold button--wide summon-button ${revealing ? "is-loading" : ""}`} onClick={() => performSummon()} disabled={revealing || profile.currency < GACHA_COST}><span>{revealing ? "星光正在聚集…" : `召喚一次　${GACHA_COST} 星晶`}</span><i aria-hidden="true">✧</i></button>
-                {profile.currency < GACHA_COST && <small className="insufficient-hint">星晶不足。完成一般戰可獲得 30 星晶，擊敗頭目可獲得 60 星晶。</small>}
+                <button type="button" className={`button button--gold button--wide summon-button ${revealing ? "is-loading" : ""}`} onClick={() => performSummon()} disabled={revealing || !canSummonNow || profile.currency < GACHA_COST}><span>{revealing ? "星光正在聚集…" : `召喚一次　${GACHA_COST} 星晶`}</span><i aria-hidden="true">✧</i></button>
+                {!canSummonNow ? <small className="insufficient-hint">離開進行中的房間後，即可召喚並保存收藏。</small> : profile.currency < GACHA_COST && <small className="insufficient-hint">星晶不足。完成一般戰可獲得 30 星晶，擊敗頭目可獲得 60 星晶。</small>}
                 <div className="pool-preview"><span>池內收藏</span><div>{drawCardIds.map((id) => { const definition = pool === "character" ? characters.find((item) => item.id === id) : cards.find((item) => item.id === id); const rarity = definition?.rarity ?? "common"; return <i key={id} className={`pool-preview__gem rarity-${rarity}`} title={definition?.name ?? id}>✦</i>; })}</div></div>
               </div>
             </div>
@@ -586,10 +620,10 @@ function App() {
           </section>
         )}
 
-        <footer className="site-footer"><span>星願魔法團</span><span>月光仍亮著，旅程就還沒結束。</span><a href="https://github.com" target="_blank" rel="noreferrer">GitHub 原始碼 <span aria-hidden="true">↗</span></a></footer>
+        <footer className="site-footer"><span>星願魔法團</span><span>月光仍亮著，旅程就還沒結束。</span><a href="https://github.com/yuiban76/starwish-magical-team" target="_blank" rel="noreferrer">GitHub 原始碼 <span aria-hidden="true">↗</span></a></footer>
       </main>
 
-      <nav className="mobile-nav" aria-label="主要導覽">{(["home", "summon", "collection"] as Route[]).map((item) => <button type="button" key={item} className={route === item ? "is-active" : ""} onClick={() => navigate(item)} aria-current={route === item ? "page" : undefined}><span aria-hidden="true">{item === "home" ? "⌂" : item === "summon" ? "✧" : "▤"}</span><small>{routeNames[item]}</small></button>)}</nav>
+      <nav className="mobile-nav" aria-label="主要導覽">{(["home", "summon", "collection"] as Route[]).map((item) => <button type="button" key={item} className={route === item ? "is-active" : ""} onClick={() => item === "home" && (view || connection === "demo" || connection === "connected") ? leaveRoom() : navigate(item)} aria-current={route === item ? "page" : undefined}><span aria-hidden="true">{item === "home" ? "⌂" : item === "summon" ? "✧" : "▤"}</span><small>{routeNames[item]}</small></button>)}</nav>
       {toast && <div className={`toast toast--${toast.kind}`} role={toast.kind === "error" ? "alert" : "status"}><span>{toast.kind === "error" ? "!" : "✦"}</span>{toast.message}<button type="button" aria-label="關閉訊息" onClick={() => setToast(null)}>×</button></div>}
     </div>
   );
