@@ -97,6 +97,10 @@ afterEach(async () => {
 async function serverWithTemporaryData(engine = testEngine()) {
   const dataDirectory = mkdtempSync(join(tmpdir(), "starwish-server-test-"));
   directories.push(dataDirectory);
+  return serverInDirectory(dataDirectory, engine);
+}
+
+async function serverInDirectory(dataDirectory: string, engine = testEngine()) {
   const running = await startGameServer({ engine, host: "127.0.0.1", port: 0, dataDirectory, webDirectory: join(dataDirectory, "missing-web") });
   servers.push(running);
   return running;
@@ -190,5 +194,37 @@ describe("local host server", () => {
     const resumedConnected = await nextMessage(resumed);
     expect(resumedConnected).toMatchObject({ playerId: connected.playerId, resumeToken: connected.resumeToken });
     await nextMessage(resumed);
+  });
+
+  it("restores a saved room and player state after the host process restarts", async () => {
+    const dataDirectory = mkdtempSync(join(tmpdir(), "starwish-server-restart-test-"));
+    directories.push(dataDirectory);
+    const engine = testEngine();
+    const firstHost = await serverInDirectory(dataDirectory, engine);
+    const firstBase = `http://127.0.0.1:${firstHost.address.port}`;
+    const created = await (await fetch(`${firstBase}/api/rooms`, { method: "POST" })).json() as { roomCode: string };
+    const url = `ws://127.0.0.1:${firstHost.address.port}/ws?room=${created.roomCode}`;
+    const player = await connect(url);
+    player.send(JSON.stringify({ type: "join", displayName: "持續冒險", profile }));
+    const connected = await nextMessage(player);
+    await nextMessage(player);
+    player.send(JSON.stringify({ type: "ready" }));
+    const updated = await nextMessage(player);
+    expect((updated.view as GameView).players[0]?.isReady).toBe(true);
+
+    await firstHost.close();
+    servers.splice(servers.indexOf(firstHost), 1);
+
+    const secondHost = await serverInDirectory(dataDirectory, engine);
+    const secondBase = `http://127.0.0.1:${secondHost.address.port}`;
+    expect(await (await fetch(`${secondBase}/api/health`)).json()).toMatchObject({ ok: true, rooms: 1, connectedPlayers: 0 });
+    const resumed = await connect(`ws://127.0.0.1:${secondHost.address.port}/ws?room=${created.roomCode}`);
+    resumed.send(JSON.stringify({ type: "join", displayName: "恢復玩家", profile, resumeToken: connected.resumeToken }));
+    const resumedConnected = await nextMessage(resumed);
+    const restored = await nextMessage(resumed) as { type: string; view: GameView };
+    expect(resumedConnected).toMatchObject({ playerId: connected.playerId, resumeToken: connected.resumeToken });
+    expect(restored.view.roomCode).toBe(created.roomCode);
+    expect(restored.view.players[0]?.isReady).toBe(true);
+    expect(restored.view.self.currency).toBe(profile.currency);
   });
 });
