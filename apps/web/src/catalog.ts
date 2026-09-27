@@ -7,13 +7,22 @@ import {
 } from "@starwish/shared";
 import type { CardView, PlayerProfile } from "@starwish/shared";
 
-const portraitFocus: Record<string, string> = { luna: "62%", sol: "42%", nova: "78%", aria: "100%", yume: "44%", nene: "100%", akari: "100%", ruri: "78%" };
+const portraitImages: Record<string, string> = {
+  luna: "luna-portrait.png",
+  sol: "rose-guardian.png",
+  nova: "nova-portrait.png",
+  aria: "aria-portrait.png",
+  yume: "yume-portrait.png",
+  nene: "nene-portrait.png",
+  akari: "akari-portrait.png",
+  ruri: "ruri-portrait.png",
+};
 
 export const characters = gameCharacters.map((character) => ({
   ...character,
+  portraitImage: `/assets/${portraitImages[character.id]}`,
   summary: character.description,
   element: character.id === "luna" ? "月" : character.id === "sol" ? "日" : character.id === "nova" ? "星" : character.id === "aria" ? "光" : "夢",
-  focus: portraitFocus[character.id] ?? "60%",
 }));
 
 export const cards = gameCards.map((card) => ({

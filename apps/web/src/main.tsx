@@ -32,18 +32,16 @@ function useRoute(): [Route, (route: Route) => void] {
 
 function CharacterPortrait({ characterId, size = "normal" }: { characterId: string; size?: "normal" | "small" | "large" }) {
   const character = characters.find((item) => item.id === characterId) ?? characters[0]!;
-  const isRosePortrait = characterId === "sol";
   return (
     <div
-      className={`character-portrait character-portrait--${size} ${isRosePortrait ? "character-portrait--solo" : ""}`}
+      className={`character-portrait character-portrait--${size}`}
       style={{
-        "--focus-x": character.focus,
         "--portrait-color": character.color,
       } as CSSProperties}
       role="img"
       aria-label={`原創角色 ${character.name} 立繪`}
     >
-      <div className="character-portrait__image" />
+      <div className="character-portrait__image"><img src={character.portraitImage} alt="" aria-hidden="true" loading="lazy" decoding="async" /></div>
       <span className="character-portrait__sigil" aria-hidden="true">✦</span>
     </div>
   );
@@ -111,6 +109,7 @@ function App() {
   const [pool, setPool] = useState<"character" | "card">("character");
   const [lastDrop, setLastDrop] = useState<{ id: string; name: string; rarity: string; level: number; upgraded: boolean; refunded: number; pool: "character" | "card" } | null>(null);
   const [revealing, setRevealing] = useState(false);
+  const [summonRarity, setSummonRarity] = useState<"common" | "rare" | "epic">("common");
   const [battleSelection, setBattleSelection] = useState<string[]>([]);
   const [targetId, setTargetId] = useState("");
   const [importError, setImportError] = useState("");
@@ -121,6 +120,8 @@ function App() {
   const demoRef = useRef(false);
   const profileRef = useRef(profile);
   const localEngineStateRef = useRef<StarwishGameState | null>(null);
+  const summonTimerRef = useRef<number | null>(null);
+  const summonLockedRef = useRef(false);
 
   useEffect(() => {
     profileRef.current = profile;
@@ -136,6 +137,7 @@ function App() {
   useEffect(() => () => {
     manualCloseRef.current = true;
     if (retryTimerRef.current !== null) window.clearTimeout(retryTimerRef.current);
+    if (summonTimerRef.current !== null) window.clearTimeout(summonTimerRef.current);
     socketRef.current?.close();
   }, []);
 
@@ -336,28 +338,32 @@ function App() {
   }, [dispatchDemo, pushToast]);
 
   const performSummon = useCallback(() => {
-    if (revealing) return;
+    if (summonLockedRef.current) return;
     if (!canSummonNow) {
       pushToast("請先離開進行中的房間，再召喚角色或卡牌。", "info");
       return;
     }
+    const result = drawFromPool(profileRef.current, pool);
+    if (result.error) {
+      pushToast(result.error.message, "error");
+      return;
+    }
+    const drop = result.drop;
+    if (!drop) return;
+    summonLockedRef.current = true;
+    setLocalProfile(result.profile);
+    setSummonRarity(drop.rarity);
     setRevealing(true);
     setLastDrop(null);
-    window.setTimeout(() => {
-      const result = drawFromPool(profileRef.current, pool);
-      if (result.error) {
-        setRevealing(false);
-        pushToast(result.error.message, "error");
-        return;
-      }
-      if (result.drop) {
-        setLocalProfile(result.profile);
-        setLastDrop(result.drop);
-        pushToast(result.drop.refunded ? `已抽到滿級重複項目，退還 ${result.drop.refunded} 星晶。` : result.drop.upgraded ? `${result.drop.name} 升至 ${levelText(result.drop.level)}。` : `新夥伴加入收藏：${result.drop.name}。`, "success");
-      }
+    const revealDelay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 1350;
+    summonTimerRef.current = window.setTimeout(() => {
+      setLastDrop(drop);
       setRevealing(false);
-    }, 520);
-  }, [canSummonNow, pool, pushToast, revealing, setLocalProfile]);
+      summonLockedRef.current = false;
+      summonTimerRef.current = null;
+      pushToast(drop.refunded ? `已抽到滿級重複項目，退還 ${drop.refunded} 星晶。` : drop.upgraded ? `${drop.name} 升至 ${levelText(drop.level)}。` : `新收藏已加入：${drop.name}。`, "success");
+    }, revealDelay);
+  }, [canSummonNow, pool, pushToast, setLocalProfile]);
 
   const exportProfile = useCallback(() => {
     const blob = new Blob([JSON.stringify(profile, null, 2)], { type: "application/json" });
@@ -592,9 +598,9 @@ function App() {
           <section className="summon-page page-enter" aria-labelledby="summon-title">
             <div className="summon-heading"><div><p className="eyebrow">星辰的回信</p><h1 id="summon-title">星願召喚</h1><p>把星晶放進月光裡，看看誰會回應你的願望。</p></div><div className="summon-balance"><span>✦</span><strong>{profile.currency.toLocaleString()}</strong><small>可用星晶</small></div></div>
             <div className="summon-layout">
-              <div className={`summon-art ${revealing ? "is-revealing" : ""}`} aria-label="四位原創魔法少女在星空下等待召喚"><div className="summon-art__image" /><div className="summon-art__glow" /><div className="summon-art__copy"><span className="tiny-star">✦</span><strong>星光會記得<br />每一個願望。</strong><small>STAR WISHES FIND THEIR WAY</small></div><div className="summon-art__sigil">✧</div></div>
+              <div className={`summon-art ${revealing ? `is-revealing summon-art--${summonRarity}` : ""} ${lastDrop ? `summon-art--${lastDrop.rarity}` : ""}`} aria-label="四位原創魔法少女在星空下等待召喚"><div className="summon-art__image" /><div className="summon-art__glow" />{revealing && <div className="summon-ritual" aria-hidden="true"><div className="summon-ritual__rays" /><div className="summon-ritual__ring summon-ritual__ring--outer" /><div className="summon-ritual__ring summon-ritual__ring--inner" /><div className="summon-ritual__crest">✧</div>{Array.from({ length: 12 }, (_, index) => <i key={index} className="summon-ritual__spark" style={{ "--angle": `${index * 30}deg`, "--index": index } as CSSProperties}>✦</i>)}</div>}{lastDrop ? <div className="summon-art__reveal" key={`${lastDrop.pool}-${lastDrop.id}-${lastDrop.level}`}><span className="summon-art__reveal-mark" aria-hidden="true">{lastDrop.pool === "character" ? "✧" : "◈"}</span><small>{rarityName(lastDrop.rarity)} · {lastDrop.pool === "character" ? "角色" : "卡牌"}</small><strong>{lastDrop.name}</strong><span>{lastDrop.refunded ? "星晶回響" : lastDrop.upgraded ? "星光更耀眼了" : "願望已經抵達"}</span></div> : <div className="summon-art__copy"><span className="tiny-star">✦</span><strong>星光會記得<br />每一個願望。</strong><small>STAR WISHES FIND THEIR WAY</small></div>}<div className="summon-art__sigil">✧</div></div>
               <div className="summon-console panel">
-                <div className="pool-tabs" role="tablist" aria-label="召喚池"><button type="button" role="tab" aria-selected={pool === "character"} className={pool === "character" ? "is-active" : ""} onClick={() => { setPool("character"); setLastDrop(null); }}>角色召喚</button><button type="button" role="tab" aria-selected={pool === "card"} className={pool === "card" ? "is-active" : ""} onClick={() => { setPool("card"); setLastDrop(null); }}>卡牌召喚</button></div>
+                <div className="pool-tabs" role="tablist" aria-label="召喚池"><button type="button" role="tab" aria-selected={pool === "character"} className={pool === "character" ? "is-active" : ""} disabled={revealing} onClick={() => { setPool("character"); setLastDrop(null); }}>角色召喚</button><button type="button" role="tab" aria-selected={pool === "card"} className={pool === "card" ? "is-active" : ""} disabled={revealing} onClick={() => { setPool("card"); setLastDrop(null); }}>卡牌召喚</button></div>
                 <div className="pool-summary"><span className="pool-summary__ornament">{pool === "character" ? "✧" : "◈"}</span><div><h2>{pool === "character" ? "星之同伴" : "旅途秘術"}</h2><p>{pool === "character" ? "讓新夥伴加入你的收藏與下一趟遠征。" : "把新的魔法帶進你編排的牌組。"}</p></div></div>
                 <div className="rates-box"><div><strong>召喚機率</strong><small>每次抽取獨立計算 · 沒有保底</small></div><div className="rate-list"><span><i className="rarity-dot rarity-dot--common" />普通 <b>{Math.round(RARITY_ODDS.common * 100)}%</b></span><span><i className="rarity-dot rarity-dot--rare" />稀有 <b>{Math.round(RARITY_ODDS.rare * 100)}%</b></span><span><i className="rarity-dot rarity-dot--epic" />史詩 <b>{Math.round(RARITY_ODDS.epic * 100)}%</b></span></div></div>
                 {lastDrop && <div className={`summon-result summon-result--${lastDrop.rarity}`} role="status"><span className="summon-result__star">✦</span><div><small>{lastDrop.refunded ? "滿級重複收藏" : lastDrop.upgraded ? "收藏升級" : "新收藏"} · {rarityName(lastDrop.rarity)}</small><strong>{lastDrop.name}</strong><span>{lastDrop.refunded ? `退還 ${lastDrop.refunded} 星晶` : `${levelText(lastDrop.level)}${lastDrop.upgraded ? " · 能力提升" : " · 已加入收藏"}`}</span></div><span className="summon-result__sparkle" aria-hidden="true">✧</span></div>}
